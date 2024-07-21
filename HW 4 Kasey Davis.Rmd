@@ -1,0 +1,1134 @@
+---
+title: "HW 4 Kasey Davis"
+author: "Kasey Davis"
+date: "2024-07-20"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+The goal of this RMD is to pull in comment data from a Honeywell data set and use Regex to pull comments by category and sentiment. 
+
+#pull in data
+
+```{r}
+library(readr)
+Data <- read_csv("~/School/Advanced Analytics/00_Data/glassdoortest1.csv")
+```
+
+Let's get our column names.
+
+```{r}
+cat(colnames(Data), sep = ",\n")
+```
+
+Change X1 to ID
+
+```{r}
+Data <- Data %>%
+    rename(ID = "...1")
+```
+
+Ok, cool. Now, let's separate out the pros and cons into separate data sets.
+
+```{r}
+#Creating pros
+Pros_df <- Data %>%
+    select(c(ID, pros)) %>%
+    filter(!is.na(pros)) %>%
+    rename('comments' = 'pros')
+
+#Creating conss
+Cons_df <- Data %>%
+    select(c(ID, cons)) %>%
+    filter(!is.na(cons)) %>%
+    rename('comments' = 'cons')
+```
+
+Now we need to remove the "unicode" characters in the strings
+
+```{r}
+Pros_df <- Pros_df %>%
+  as_tibble() %>%
+  mutate(comments = str_replace_all(comments, "\uFFFD", "")) 
+
+Cons_df <- Cons_df %>%
+  as_tibble() %>%
+  mutate(comments = str_replace_all(comments, "\uFFFD", "")) 
+```
+
+Convert everything to lowercase for simplicity.
+
+```{r}
+#Converting to lower case
+
+Pros_df <- Pros_df %>%
+    mutate(comments = tolower(comments))
+
+Cons_df <- Cons_df %>%
+    mutate(comments = tolower(comments))
+
+```
+
+Remove all line breaks.
+
+```{r}
+#Remove all line breaks
+
+#From: https://stackoverflow.com/questions/21781014/remove-all-line-breaks-enter-symbols-from-the-string-using-r
+
+Pros_df$comments <- gsub("[\r\n]", "", Pros_df$comments)
+
+Pros_df <- Pros_df %>%
+    select(ID, comments) %>%
+    na.omit()
+
+Cons_df$comments <- gsub("[\r\n]", "", Cons_df$comments)
+
+Cons_df <- Cons_df %>%
+    select(ID, comments) %>%
+    na.omit()
+
+```
+
+#Set start time so we know how long the processing takes at the end:
+
+```{r}
+start_time <- now()
+
+```
+
+#Time to start building out categories, starting with:
+
+##Benefits
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--#################################### BENEFITS ######################################################### -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+benefits <- c('\\brx\\b', #this will only get the word "rx" and nothing else - \\b's are word boundaries
+              '^.*medic.*$', #this will get medic, medicine, medical, etc.
+              '(?=.*bene)(?=.*(?:health))', #This will get benefits, beneficial, benefit, etc. but only if it occurs with health, healthy, healthcare, in the same comment
+              '(?=.*coverage)(?=.*(?:medic|deduct|prescrip|insur|drug|health|dependent))', #This will get coverage, overages, etc. as long as some form of medic, deduct, prescription, etc. occur in the same comment
+                    '\\b(?:health\\W+(?:\\w+\\W+){0,1}?care)\\b', #this will only get health care or healthcare (e.g. health and care must occur within one word)
+                    '\\bhealthcare\\b', #this will only get the word "healthcare". If there is a space between them, it won't pick it up.
+              '\\bhealth\\s?care\\b', #this will get the word "healthcare" or "health care" as the \\s? indicates zero or one whitespace character.
+                    '\\b(?:medical\\W+(?:\\w+\\W+){0,3}?benefits|benefits\\W+(?:\\w+\\W+){0,3}?medical)\\b', #This will get medical benefits or benefits medical as long as they occur within 3 word of each other.
+              '^.*vacation.*$',
+              '\\bpto\\b'
+                     )
+
+ 
+
+benefits_pattern <- paste(benefits, collapse = "|") #This puts everything from what you put into `benefits` together into a pattern to search for. This is creating one singular regex amalgamation
+
+ #First benefits pros:
+
+benefits_pros <- as.data.frame(Pros_df[grep(benefits_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and searches over the entire column of "comments" in the Comments_df. This pulls out just the benefits sentences. Using the above pattern to search through the comments column of comments_df
+
+TEST_pros <- Pros_df %>%
+    mutate(benefits = ifelse(comments %in% benefits_pros$comments, "Y",
+                             "N")) #This creates a new object, TEST_pros, from Comments_df and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "benefits" column
+
+#Now for benefit cons:
+
+benefits_cons <- as.data.frame(Cons_df[grep(benefits_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and searches over the entire column of "comments" in the Comments_df. This pulls out just the benefits sentences. Using the above pattern to search through the comments column of comments_df
+
+TEST_cons <- Cons_df %>%
+    mutate(benefits = ifelse(comments %in% benefits_cons$comments, "Y",
+                             "N")) #This creates a new object, TEST_cons, from Comments_df and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "benefits" column
+```
+
+Looked through Test_cons and Test_pros and everything seems to look good! Now to do some other categories:
+
+##Benefits - Insurance subcategory
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--#################################### BENEFITS_INSURANCE ############################################### -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+benefits_insurance <- c('(?=.*insur)(?=.*(?:medic|dental|life|vision|supplement|disabl))',
+                        '\\b(?:insurance\\W+(?:\\w+\\W+){0,1}?premium)\\b',
+                        '\\binsurance\\b'
+                        )
+
+ 
+
+ 
+
+benefits_insurance_pattern <- paste(benefits_insurance, collapse = "|") #This puts everything from what you put into `benefits` together into a pattern to search for.
+
+#For Pros
+
+benefits_insurance_pros <- as.data.frame(Pros_df[grep(benefits_insurance_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and searches over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(benefits_insurance = ifelse(comments %in% benefits_insurance_pros$comments, "Y",
+                             "N")) #This creates a new object, TEST, from Comments_df and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "benefits" column
+
+#For Cons
+
+benefits_insurance_cons <- as.data.frame(Cons_df[grep(benefits_insurance_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and searches over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(benefits_insurance = ifelse(comments %in% benefits_insurance_cons$comments, "Y",
+                             "N")) #This creates a new object, TEST, from Comments_df and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "benefits" column
+```
+
+Seems to have worked! Let's keep going with Compensation next
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# COMPENSATION ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+compensation <- c('\\bsalary\\b', 
+              '^.*compen.*$',
+              '\\bpay\\b',
+              '^.*incent.*$',
+              '^.*rate.*$',
+              '^.*money.*$'
+                     )
+
+#What else should we add?
+ 
+
+compensation_pattern <- paste(compensation, collapse = "|") #This puts everything from what you put into `compensation` together into a pattern to search for.
+
+#Pros
+
+compensation_pros <- as.data.frame(Pros_df[grep(compensation_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(compensation = ifelse(comments %in% compensation_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+
+#Cons
+
+compensation_cons <- as.data.frame(Cons_df[grep(compensation_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(compensation = ifelse(comments %in% compensation_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+```
+
+Seems to have worked! Let's keep going with Compensation next
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# COMPENSATION ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+compensation <- c('\\bsalary\\b', 
+              '^.*compen.*$',
+              '\\bpay\\b',
+              '^.*incent.*$',
+              '^.*rate.*$',
+              '^.*money.*$'
+                     )
+
+#What else should we add?
+ 
+
+compensation_pattern <- paste(compensation, collapse = "|") #This puts everything from what you put into `compensation` together into a pattern to search for.
+
+#Pros
+
+compensation_pros <- as.data.frame(Pros_df[grep(compensation_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(compensation = ifelse(comments %in% compensation_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+
+#Cons
+
+compensation_cons <- as.data.frame(Cons_df[grep(compensation_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(compensation = ifelse(comments %in% compensation_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+```
+
+Looks good! Only 17 more to go...
+
+Next we'll do Management
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# MANAGEMENT ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+management <- c(
+  "\\bmanager\\b",             # Exact match for "manager"
+  "\\bboss\\b",                 # Exact match for "boss"
+  "\\bsupervisor\\b",           # Exact match for "supervisor"
+  "\\blead\\b",                # Exact match for "lead"
+  "\\bdirect report\\b",         # Exact match for "direct report"
+  "\\breport\\b (to|with)",    # "report" followed by "to" or "with" 
+  "^.*manage.*$",               # Any line containing "manage"
+  "^.*supervise.*$",             # Any line containing "supervise"
+  "^.*lead.*$",                 # Any line containing "lead"
+  "^.*direct report.*$",        # Any line containing "direct report"
+  "\\bmy (manager|boss|supervisor|lead)\\b" # "my" followed by manager terms
+)
+
+management_pattern <- paste(management, collapse = "|") #This puts everything from what you put into `compensation` together into a pattern to search for.
+
+#Pros
+
+management_pros <- as.data.frame(Pros_df[grep(management_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(management = ifelse(comments %in% management_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+
+#Cons
+
+management_cons <- as.data.frame(Cons_df[grep(management_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(management = ifelse(comments %in% management_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+```
+
+Looks good! Now Safety
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# SAFETY ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+safety <- c(
+  "\\bsafe\\b",                         # Words containing "safe"
+  "\\binjury\\b",                     # Words containing "injury"
+  "\\bhazard\\b",                     # Words containing "hazard"
+  "\\baccident\\b",                   # Words containing "accident"
+  "\\bwellbeing\\b",                  # Words containing "wellbeing" 
+  "\\bprotection\\b",                  # Words containing "protection"
+  "PPE",                              # Personal Protective Equipment (common abbreviation)
+  "(?<!job\\s)\\bsecurity\\b(?!\\sjob)", # Security but not preceeded or followed by Job
+  "^.*safety.*$",                       # Anything mentioning "safety"
+  "^.*risk.*$",                         # Anything mentioning "risk"
+  "^.*danger.*$",                       # Anything mentioning "danger"
+  "^.*unsafe.*$"                        # Anything mentioning "unsafe"
+)
+
+safety_pattern <- paste(safety, collapse = "|") #This puts everything from what you put into `compensation` together into a pattern to search for.
+
+#Pros
+
+safety_pros <- as.data.frame(Pros_df[grep(safety_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(safety = ifelse(comments %in% safety_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+
+#Cons
+
+safety_cons <- as.data.frame(Cons_df[grep(safety_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(safety = ifelse(comments %in% safety_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "compensation" column
+```
+
+Had to make some edits to "security" since it was pulling "job security" but otherwise, this looks good!
+
+Now Work-Life-Balance
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# WLB ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+worklife <- c(
+  "\\bwork-life\\s?balance\\b",    # Matches "work-life balance" or "worklife balance"
+  "\\bflexibility\\b",              # Matches "flexibility"
+  "\\bworkload\\b",                 # Matches "workload"
+  "\\bhour\\b",                     # Matches "hour" or "hours"
+  "\\bovertime\\b",                 # Matches "overtime"
+  "\\btime\\s?off\\b",              # Matches "time off"
+  "PTO",                            # Matches "PTO" 
+  "\\bvacation\\b",                 # Matches "vacation"
+  "\\bsick\\s?leave\\b",            # Matches "sick leave" or "sickleave"
+  "\\bremote\\s?work\\b",           # Matches "remote work"
+  "\\btelecommuting\\b",            # Matches "telecommuting"
+  "\\bhybrid\\s?work\\b"            # Matches "hybrid work"
+)
+
+worklife_pattern <- paste(worklife, collapse = "|") #This puts everything from what you put into `worklife` together into a pattern to search for.
+
+#Pros
+
+worklife_pros <- as.data.frame(Pros_df[grep(worklife_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(worklife = ifelse(comments %in% worklife_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "worklife" column
+
+#Cons
+
+worklife_cons <- as.data.frame(Cons_df[grep(worklife_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(worklife = ifelse(comments %in% worklife_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "worklife" column
+```
+
+Looks good! Now Career Development/Growth
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# Growth ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+growth <- c(
+  "\\bgrowth\\b",                    # Matches "growth"
+  "\\bdevelopment\\b",               # Matches "development"
+  "\\bopportunit(y|ies)\\b",         # Matches "opportunity" or "opportunities"
+  "\\bpromotion\\b",                 # Matches "promotion"
+  "\\badvancement\\b",                # Matches "advancement"
+  "\\btraining\\b",                  # Matches "training"
+  "\\b(mentor|mentorship)\\b",       # Matches "mentor" or "mentorship"
+  "\\bcareer\\s?path\\b",            # Matches "career path"
+  "\\bskill\\s?development\\b"       # Matches "skill development" or "skills development"
+)
+
+growth_pattern <- paste(growth, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+growth_pros <- as.data.frame(Pros_df[grep(growth_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(growth = ifelse(comments %in% growth_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "growth" column
+
+#Cons
+
+growth_cons <- as.data.frame(Cons_df[grep(growth_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(growth = ifelse(comments %in% growth_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "growth" column
+```
+
+Looks good! Now Culture
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# culture ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+culture <- c(
+  "\\bculture\\b",                   # Matches "culture"
+  "\\benvironment\\b",               # Matches "environment"
+  "\\batmosphere\\b",                # Matches "atmosphere"
+  "\\bvalues\\b",                     # Matches "values"
+  "\\bcollaboration\\b",             # Matches "collaboration"
+  "\\bteamwork\\b",                  # Matches "teamwork"
+  "\\bcommunication\\b",             # Matches "communication"
+  "\\brecognition\\b",               # Matches "recognition"
+  "\\bappreciation\\b",              # Matches "appreciation"
+  "\\bdiversity\\b",                 # Matches "diversity"
+  "\\binclusion\\b",                 # Matches "inclusion"
+  "\\bbelonging\\b"                  # Matches "belonging"
+)
+
+culture_pattern <- paste(culture, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+culture_pros <- as.data.frame(Pros_df[grep(culture_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(culture = ifelse(comments %in% culture_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "culture" column
+
+#Cons
+
+culture_cons <- as.data.frame(Cons_df[grep(culture_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(culture = ifelse(comments %in% culture_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "culture" column
+```
+
+This one looks good and particularly juicy. On to Workplace
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# workplace ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+workplace <- c(
+  "\\bfacilit(y|ies)\\b",           # Matches "facility" or "facilities"
+  "\\bworkspace\\b",                 # Matches "workspace"
+  "\\boffice\\b",                    # Matches "office"
+  "\\bergonomics\\b",                # Matches "ergonomics"
+  "\\bequipment\\b",                 # Matches "equipment"
+  "\\bcomfort\\b",                   # Matches "comfort"
+  "\\bcleanliness\\b",               # Matches "cleanliness"
+  "\\bmaintenance\\b"                # Matches "maintenance"
+)
+
+workplace_pattern <- paste(workplace, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+workplace_pros <- as.data.frame(Pros_df[grep(workplace_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(workplace = ifelse(comments %in% workplace_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "workplace" column
+
+#Cons
+
+workplace_cons <- as.data.frame(Cons_df[grep(workplace_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(workplace = ifelse(comments %in% workplace_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "workplace" column
+```
+
+Looks good! Now Technology
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# technology ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+technology <- c(
+  "\\btechnology\\b",             # Matches "technology"
+  "\\bsoftware\\b",               # Matches "software"
+  "\\bhardware\\b",               # Matches "hardware"
+  "\\bupdate\\b",                 # Matches "update", "updates", "updated", etc.
+  "\\bsystem\\b",                 # Matches "system", "systems"
+  "\\btool\\b",                   # Matches "tool", "tools"
+  "\\boutdated\\b"                # Matches "outdated"
+)
+
+
+technology_pattern <- paste(technology, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+technology_pros <- as.data.frame(Pros_df[grep(technology_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(technology = ifelse(comments %in% technology_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "technology" column
+
+#Cons
+
+technology_cons <- as.data.frame(Cons_df[grep(technology_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(technology = ifelse(comments %in% technology_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "technology" column
+```
+
+This is picking up both internal technology and tech offerings as written. We're okay with that for now, but may want to come back to refine.
+
+Now onto innovation
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# innovation ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+innovation <- c(
+  "\\binnovation\\b",             # Matches "innovation"
+  "\\bcreativ\\b",               # Matches "creative", "creativity"
+  "\\bidea\\b",                   # Matches "idea", "ideas"
+  "\\binitiative\\b",             # Matches "initiative", "initiatives"
+   "\\bagil(e|ity)\\b" #Matches "agile" or "agility"
+)
+
+
+
+innovation_pattern <- paste(innovation, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+innovation_pros <- as.data.frame(Pros_df[grep(innovation_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(innovation = ifelse(comments %in% innovation_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "innovation" column
+
+#Cons
+
+innovation_cons <- as.data.frame(Cons_df[grep(innovation_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(innovation = ifelse(comments %in% innovation_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "innovation" column
+```
+
+Looks good! Now collaboration
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# collaboration ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+collaboration <- c(
+  "\\bcollaboration\\b",          # Matches "collaboration"
+  "\\bteamwork\\b",                   # Matches "teamwork"
+  "\\bpartner\\b",                # Matches "partner", "partners", "partnership"
+  "\\bcooperation\\b",            # Matches "cooperation"
+  "\\bwork\\s?together\\b"        # Matches "work together"
+)
+
+
+
+
+collaboration_pattern <- paste(collaboration, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+collaboration_pros <- as.data.frame(Pros_df[grep(collaboration_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(collaboration = ifelse(comments %in% collaboration_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "collaboration" column
+
+#Cons
+
+collaboration_cons <- as.data.frame(Cons_df[grep(collaboration_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(collaboration = ifelse(comments %in% collaboration_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "collaboration" column
+```
+
+Had to make some edits here, but I think this is good now. Onto recognition
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# recognition ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+recognition <- c(
+  "\\brecognition\\b",           # Matches "recognition"
+  "\\breward\\b",                 # Matches "reward", "rewards", "rewarding", "rewarded"
+  "\\bbonus\\b",                  # Matches "bonus", "bonuses"
+  "\\bappreciation\\b",            # Matches "appreciation", "appreciate"
+  "\\bthank\\b",                  # Matches "thank", "thanks", "thank you"
+  "\\bvalue\\b",                   # Matches "valued", "valuable"
+  "\\baffirmation\\b"             # Matches "affirmation"
+)
+
+
+
+
+
+recognition_pattern <- paste(recognition, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+recognition_pros <- as.data.frame(Pros_df[grep(recognition_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(recognition = ifelse(comments %in% recognition_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "recognition" column
+
+#Cons
+
+recognition_cons <- as.data.frame(Cons_df[grep(recognition_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(recognition = ifelse(comments %in% recognition_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "recognition" column
+```
+
+Looks good! Now DEI
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# DEI ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+dei <- c(
+    "(?<!work\\s)\\bdiversity\\b(?!\\swork)",  # Matches "diversity" if "work" isn't in the sentence
+  "\\bDEI\\b", #Matches "DEI"
+  "\\binclusion\\b",               # Matches "inclusion", "inclusive"
+  "\\bequity\\b",                  # Matches "equity"
+  "\\bbelonging\\b",               # Matches "belonging"
+  "\\brepresentation\\b",          # Matches "representation", "represented"
+  "\\bequal\\s?opportunity\\b"    # Matches "equal opportunity" or "equal opportunity"
+)
+
+
+dei_pattern <- paste(dei, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+dei_pros <- as.data.frame(Pros_df[grep(dei_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(dei = ifelse(comments %in% dei_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "dei" column
+
+#Cons
+
+dei_cons <- as.data.frame(Cons_df[grep(dei_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(dei = ifelse(comments %in% dei_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "dei" column
+```
+
+Having trouble with the 'diversity' expression. Trying to get it to not pull if "work" is in the same sentence, but can only get it if "work" directly precedes or follows it. Should revisit.
+
+Next, stress/burnout
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# stress ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+stress <- c(
+  "\\bstress\\b",                   # Matches "stress", "stressed", "stressful"
+  "\\bburnout\\b",                  # Matches "burnout"
+  "\\boverwhelmed\\b",              # Matches "overwhelmed"
+  "\\bexhausted\\b",                # Matches "exhausted"
+  "\\bpressure\\b",                 # Matches "pressure"
+  "\\bdemanding\\b"                 # Matches "demanding"
+)
+
+
+
+stress_pattern <- paste(stress, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+stress_pros <- as.data.frame(Pros_df[grep(stress_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(stress = ifelse(comments %in% stress_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "stress" column
+
+#Cons
+
+stress_cons <- as.data.frame(Cons_df[grep(stress_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(stress = ifelse(comments %in% stress_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "stress" column
+```
+
+This looks particularly good. Next workload/hours
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# workload ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+workload <- c(
+  "\\bworkload\\b",                 # Matches "workload"
+  "\\bhour\\b",                     # Matches "hour", "hours"
+  "\\bovertime\\b",                 # Matches "overtime"
+  "\\bexcessive\\b",                # Matches "excessive"
+  "\\bunmanageable\\b"             # Matches "unmanageable"
+)
+
+
+
+
+workload_pattern <- paste(workload, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+workload_pros <- as.data.frame(Pros_df[grep(workload_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(workload = ifelse(comments %in% workload_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "workload" column
+
+#Cons
+
+workload_cons <- as.data.frame(Cons_df[grep(workload_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(workload = ifelse(comments %in% workload_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "workload" column
+```
+
+This one is also neat. Next, training/onboarding.
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# training ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+training <- c(
+  "\\btraining\\b",                 # Matches "training", "trained", "train"
+  "\\bonboarding\\b",               # Matches "onboarding"
+  "\\blearning\\b",                 # Matches "learning", "learn"
+  "\\bdevelopment\\b",               # Matches "development", "develop"
+  "\\bpreparation\\b",              # Matches "preparation", "prepared", "prepare"
+  "\\bmentor\\b"                   # Matches "mentor", "mentoring", "mentorship"
+)
+
+
+training_pattern <- paste(training, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+training_pros <- as.data.frame(Pros_df[grep(training_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(training = ifelse(comments %in% training_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "training" column
+
+#Cons
+
+training_cons <- as.data.frame(Cons_df[grep(training_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(training = ifelse(comments %in% training_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "training" column
+```
+
+This looks good. Now communication
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# communication ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+communication <- c(
+  "\\bcommunication\\b",           # Matches "communication", "communicate"
+  "\\bfeedback\\b",                # Matches "feedback"
+  "\\bclarity\\b",                 # Matches "clarity"
+  "\\btransparency\\b",             # Matches "transparency", "transparent"
+  "\\binformation\\b",             # Matches "information", "inform"
+  "\\bshare\\b",                   # Matches "share", "shared", "sharing"
+  "\\bmeeting\\b"                  # Matches "meeting", "meetings"
+)
+
+
+communication_pattern <- paste(communication, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+communication_pros <- as.data.frame(Pros_df[grep(communication_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(communication = ifelse(comments %in% communication_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "communication" column
+
+#Cons
+
+communication_cons <- as.data.frame(Cons_df[grep(communication_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(communication = ifelse(comments %in% communication_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "communication" column
+```
+
+Looks good! Now onto morale
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# morale ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+morale <- c(
+  "\\bmorale\\b",                   # Matches "morale"
+  "\\bengagement\\b",               # Matches "engagement", "engage"
+  "\\bmotivation\\b",               # Matches "motivation", "motivated", "motivate"
+  "\\benthusiasm\\b",                # Matches "enthusiasm", "enthusiastic"
+  "\\bpassion\\b",                  # Matches "passion", "passionate"
+  "\\bexcitement\\b",                # Matches "excitement", "excited", "exciting"
+  "\\bdedication\\b"                # Matches "dedication", "dedicated"
+)
+
+
+
+morale_pattern <- paste(morale, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+morale_pros <- as.data.frame(Pros_df[grep(morale_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(morale = ifelse(comments %in% morale_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "morale" column
+
+#Cons
+
+morale_cons <- as.data.frame(Cons_df[grep(morale_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(morale = ifelse(comments %in% morale_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "morale" column
+```
+
+Looks good. Finally, now for WFH
+
+```{r}
+#' <!--####################################################################################################### -->
+#' <!--####################################################################################################### -->
+#' <!--################################# wfh ######################################################## -->
+
+#From: https://stackoverflow.com/questions/26319567/use-grepl-to-search-either-of-multiple-substrings-in-a-text
+#From: https://stackoverflow.com/questions/5823503/pattern-matching-using-a-wildcard
+#From: https://stackoverflow.com/questions/31421077/r-wildcard-matching-for-certain-number-of-terms
+#From: https://www.regular-expressions.info/rlanguage.html
+
+wfh <- c(
+  "\\bremote\\s?work\\b",   # Matches "remote work"
+  "\\bWFH\\b",             # Matches "WFH"
+  "\\bwork\\s?from\\s?home\\b", # Matches "work from home"
+  "\\btelework\\b",          # Matches "telework"
+  "\\btelecommute\\b",        # Matches "telecommute"
+  "\\bvirtual\\s?work\\b"   # Matches "virtual work"
+)
+
+
+wfh_pattern <- paste(wfh, collapse = "|") #This puts everything from what you put into `growth` together into a pattern to search for.
+
+#Pros
+
+wfh_pros <- as.data.frame(Pros_df[grep(wfh_pattern, Pros_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_pros <- TEST_pros %>%
+    mutate(wfh = ifelse(comments %in% wfh_pros$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "wfh" column
+
+#Cons
+
+wfh_cons <- as.data.frame(Cons_df[grep(wfh_pattern, Cons_df$comments, value = FALSE, perl = TRUE),]) # This takes the pattern you just created and search over the entire column of "comments" in the Comments_df
+
+TEST_cons <- TEST_cons %>%
+    mutate(wfh = ifelse(comments %in% wfh_cons$comments, "Y",
+                             "N")) #This modifies the existing object, TEST, from TEST we created before and if any of the comments in the "comments" column match (%in%) the comments exactly, they get a "Y". If not they get a "N" in the new "wfh" column
+```
+
+Now time to write to excel and make it fancy!
+
+First the pros:
+
+```{r}
+##################################
+# Comment Report
+##################################
+
+#Creating df for header
+
+INTRO <- c("Honeywell",
+
+         "Data Source: Glassdoor",
+
+         "Data As Of: Q3 2024",
+
+         "Prepared on: 7/21/2024",
+
+         "Prepared by: Kasey Davis")
+
+wb <- openxlsx::createWorkbook() #Create a work book
+
+
+#Comment Report
+
+addWorksheet(wb, "Comment Report Pros") #name the worksheet in Excel
+
+writeData(wb, "Comment Report Pros", INTRO) #Write your INTRO
+
+
+#Create style
+
+style1 <- createStyle(fontColour = "#000080", textDecoration = "Bold") #Choose your custom font color (https://www.rgbtohex.net/) and make it bold. Call it style1
+
+ 
+
+addStyle(wb, style = style1, rows= 1:5, cols = 1, sheet = "Comment Report Pros") #add this style to your worksheet. Tell it which rows and columns
+
+writeData(wb, "Comment Report Pros", TEST_pros, startRow = 8) #put your DF (in this case TEST) into the sheet under your writing (row 8)
+
+hs1 <- createStyle(textDecoration = "Bold") #create a new style for heading
+
+addStyle(wb, style = hs1, rows = 8, cols = 1:nrow(TEST_pros), sheet = "Comment Report Pros") #Tell it where to go. We'll do 50 columns in this case so it can grow if needed
+
+#Freeze Panes
+
+#Also check here: https://stackoverflow.com/questions/37677326/applying-style-to-all-sheets-of-a-workbook-using-openxlsx-package-in-r
+
+freezePane(wb, "Comment Report Pros", firstActiveRow = 9) #Freeze those panes. You know you want to. Tell it where to start.
+
+#Add filter
+
+addFilter(wb, "Comment Report Pros", row = 8, cols = 1:nrow(TEST_pros)) #Add your filter as well. If you're trying to impress, you might as well go all in :)
+
+#Now we'll do a fancy save by customizing the file name using paste0 and system time. We'll also assume this was for the previous month. You'll also need to make this path the one you want on your computer. 
+
+
+saveWorkbook(wb, paste0("~/School/Advanced Analytics/00_Data/Comment_Report_Pros_Honeywell", format(floor_date(Sys.Date()-months(1), "month"), "%B_%Y") , ".xlsx"), overwrite = TRUE)
+```
+
+
+Now the cons
+
+```{r}
+##################################
+# Comment Report
+##################################
+
+#Creating df for header
+
+INTRO <- c("Honeywell",
+
+         "Data Source: Glassdoor",
+
+         "Data As Of: Q3 2024",
+
+         "Prepared on: 7/21/2024",
+
+         "Prepared by: Kasey Davis")
+
+wb <- openxlsx::createWorkbook() #Create a work book
+
+
+#Comment Report
+
+addWorksheet(wb, "Comment Report Cons") #name the worksheet in Excel
+
+writeData(wb, "Comment Report Cons", INTRO) #Write your INTRO
+
+
+#Create style
+
+style1 <- createStyle(fontColour = "#000080", textDecoration = "Bold") #Choose your custom font color (https://www.rgbtohex.net/) and make it bold. Call it style1
+
+ 
+
+addStyle(wb, style = style1, rows= 1:5, cols = 1, sheet = "Comment Report Cons") #add this style to your worksheet. Tell it which rows and columns
+
+writeData(wb, "Comment Report Cons", TEST_cons, startRow = 8) #put your DF (in this case TEST) into the sheet under your writing (row 8)
+
+hs1 <- createStyle(textDecoration = "Bold") #create a new style for heading
+
+addStyle(wb, style = hs1, rows = 8, cols = 1:nrow(TEST_cons), sheet = "Comment Report Cons") #Tell it where to go. We'll do 50 columns in this case so it can grow if needed
+
+#Freeze Panes
+
+#Also check here: https://stackoverflow.com/questions/37677326/applying-style-to-all-sheets-of-a-workbook-using-openxlsx-package-in-r
+
+freezePane(wb, "Comment Report Cons", firstActiveRow = 9) #Freeze those panes. You know you want to. Tell it where to start.
+
+#Add filter
+
+addFilter(wb, "Comment Report Cons", row = 8, cols = 1:nrow(TEST_cons)) #Add your filter as well. If you're trying to impress, you might as well go all in :)
+
+#Now we'll do a fancy save by customizing the file name using paste0 and system time. We'll also assume this was for the previous month. You'll also need to make this path the one you want on your computer. 
+
+
+saveWorkbook(wb, paste0("~/School/Advanced Analytics/00_Data/Comment_Report_Cons_Honeywell", format(floor_date(Sys.Date()-months(1), "month"), "%B_%Y") , ".xlsx"), overwrite = TRUE)
+```

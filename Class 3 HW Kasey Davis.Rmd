@@ -1,0 +1,603 @@
+---
+title: "HW 3 Kasey Davis"
+author: "Kasey Davis"
+date: "2024-06-27"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#Call libraries
+
+```{r}
+suppressPackageStartupMessages({
+    library(conflicted) # An Alternative Conflict Resolution Strategy
+    library(readxl) # read in Excel files
+    library(readr) # read in csv files
+    library(MASS) # Functions and datasets to support Venables and Ripley, "Modern Applied Statistics with S" (4th edition, 2002).
+    library(dplyr) # A Grammar of Data Manipulation
+    library(tidyr) # Tidy Messy Data
+    library(broom) # Convert Statistical Objects into Tidy Tibbles
+    library(ggplot2) # grammar of graphics for visualization
+    library(knitr) # A General-Purpose Package for Dynamic Report Generation in R
+    library(RCurl) # General Network (HTTP/FTP/...) Client Interface for R
+    library(DT) # A Wrapper of the JavaScript Library 'DataTables'
+    library(modelr) # Modelling Functions that Work with the Pipe
+    library(purrr) # Functional Programming Tools - helps with mapping (i.e., loops)
+    library(pROC) #	Display and Analyze ROC Curves
+    library(data.table) # Fast aggregation of large data (e.g. 100GB in RAM)
+    library(VIM) # Visualization and Imputation of Missing Values
+    library(gridExtra) # Miscellaneous Functions for "Grid" Graphics
+    library(Metrics) # Evaluation Metrics for Machine Learning
+    library(randomForest) # Breiman and Cutler's Random Forests for Classification and Regression
+    library(e1071) # Misc Functions of the Department of Statistics, Probability Theory Group (Formerly: E1071), TU Wien
+    library(corrplot) # Visualization of a Correlation Matrix
+    library(DMwR2) # Functions and Data for the Second Edition of "Data Mining with R"
+    library(rsample) # General Resampling Infrastructure
+    library(skimr) # Compact and Flexible Summaries of Data
+    library(psych) # Procedures for Psychological, Psychometric, and Personality Research
+    library(tree) # Classification and Regression Trees
+    library(tidymodels) # Easily Install and Load the 'Tidymodels' Packages
+    library(janitor) # Simple Tools for Examining and Cleaning Dirty Data
+    library(GGally) # Extension to 'ggplot2'
+    library(tidyquant) # Tidy Quantitative Financial Analysis
+    library(doParallel) # Foreach Parallel Adaptor for the 'parallel' Package
+    library(Boruta) # Wrapper Algorithm for All Relevant Feature Selection
+    library(correlationfunnel) # Speed Up Exploratory Data Analysis (EDA) with the Correlation Funnel
+    library(naniar) # viewing and handling missing data
+    library(plotly) # Create interactive plots
+    library(themis) # Upsampling and Downsampling methods for tidymodels
+    library(questionr) # this will give you odds ratios
+    library(tidylog, warn.conflicts = FALSE)
+})
+
+for (f in getNamespaceExports("tidylog")) {
+    conflicted::conflict_prefer(f, "tidylog", quiet = TRUE)
+}
+
+
+conflict_prefer("tune", "tune")
+```
+
+Set `conflict_prefer`.
+
+```{r}
+conflict_prefer("select", "dplyr")
+conflict_prefer("tune", "tune")
+conflict_prefer("chisq.test", "stats")
+conflict_prefer("filter", "dplyr")
+conflict_prefer("skewness", "PerformanceAnalytics")
+conflict_prefer("fit", "parsnip")
+conflict_prefer("rmse", "yardstick")
+conflict_prefer("map", "purrr")
+conflict_prefer("vip", "vip")
+```
+
+
+#Call data
+
+```{r}
+library(readxl)
+Data <- read_excel("~/School/Advanced Analytics/00_Data/WA_Fn-UseC_-HR-Employee-Attrition.xlsx")
+Data <- as.data.frame(unclass(Data))
+View(Data)
+```
+
+#Add an ID variable
+
+```{r}
+Data <- Data %>% 
+    mutate(ID = row_number()) %>%
+  select(ID, everything())
+```
+
+
+#Check for duplicates
+
+```{r}
+#check rows
+sum(is.na(duplicated(Data)))
+#check columns
+which(duplicated(Data$ID))
+```
+
+No duplicates, yay!
+
+#Data summarization
+
+```{r}
+skim(Data)
+```
+
+# Character Data Type
+
+Take a look at the character data and understand what they each mean. Find the variables that should be factors and convert them.
+
+```{r}
+#Glimpse the character data
+Data %>%
+  select_if(is.character) %>%
+  glimpse() 
+
+#from purrr #Show unique character data answers
+conflict_prefer("filter", "dplyr")
+
+Data %>%
+    select_if(is.character) %>%
+    map(unique) 
+
+#Stats on how many of each answer there are
+Data %>%
+    select_if(is.character) %>%
+    map(table) 
+
+# To get rounded proportions
+Data %>%
+    select_if(is.character) %>%
+    map(~ round(table(.) %>% prop.table(), 2)) #anonymous function
+```
+
+Looks like business travel is a factor and Over18 is homogeneous, so noting that for later. Likely can't include homogeneous variables in the regression.
+
+# Numeric Data
+
+The following will give us how many unique values are in each numeric variable. For instance we would expect a 1470 value for ID since these are supposed to be unique.
+
+```{r}
+Data %>%
+    select_if(is.numeric) %>%
+    map(~ unique(.) %>% length())
+```
+
+#above number = how many unique inputs there are for that column
+
+#arrange them in descending order for ease of view
+
+```{r}
+TEST <- Data %>%
+    select_if(is.numeric) %>%
+    map(~ unique(.) %>% length()) %>%
+  as.data.frame() # Creates a df in case we need to kick it out to Excel
+
+# Make it vertical and arrange descending
+TEST_melt <- TEST %>%
+  pivot_longer(everything()) %>%
+  arrange(desc(value))
+```
+
+In looking at TEST_melt - Few interesting things here: Employee count, Standard Hours are both homogeneous. Performance rating is only 3s and 4s, which is odd, but probably not much we can do there.
+
+#TEST is because you don't want to accidentally overwrite the data before you know it worked
+
+It appears that `EmployeeNumber` is also a unique identifier, which makes sense. We will go ahead and keep ID since it goes by row and will make it easier to find if we need to go to, for example, ID 575. We will do some house keeping and move `EmployeeNumber` right after `ID` as the second column.
+
+#changing the order in the data
+
+```{r}
+Data <- Data %>%
+  select(ID, EmployeeNumber, everything())
+```
+
+
+And finally `summary` and from the `psych` package, `describe`.
+
+```{r}
+summary(Data)
+
+conflict_prefer("describe", "psych")
+describe(Data)
+```
+
+Nothing else of note here.
+
+#Check for continuous numeric variables.
+
+```{r}
+Data %>%
+    select_if(is.numeric) %>%
+    map_df(~ unique(.) %>% length()) %>% # tries to turn it into a df instead of a list
+    gather() %>%
+    arrange(value) %>%
+    filter(value > 10) #probably continuous if more than 10
+```
+
+#Now check for discrete numeric variables.
+
+```{r}
+Data %>%
+    select_if(is.numeric) %>%
+    map_df(~ unique(.) %>% length()) %>% # tries to turn it into a df instead of a list
+    gather() %>%
+    arrange(value) %>%
+    filter(value <= 10) #probably discrete if less than 10
+```
+
+Same info with employee count and standard hours. Will need to remove those.
+
+# Preprocess with the data
+
+##Including lab language for myself later:
+
+If possible, you want to do all of your data preprocessing within `recipes` to leave the original data untouched. This makes it as easy as possible to pass the raw data into any of the `recipes` you create for your various models. You will need to play around with this and fully understand what is happening when you pass the data in `recipes`. This will also help you to find the limitations of the `recipes` package and determine what needs to happen outside of the package.
+
+Here is a general guide for the order to do your steps which we will reiterate below specifically for the `recipes` package.
+
+1. Impute
+2. Handle factor levels
+3. Individual transformations for skewness and other issues
+4. Discretize (if needed and if you have no other choice)
+5. Create dummy variables
+6. Create interactions
+7. Normalization steps (center, scale, range, etc)
+8. Multivariate transformation (e.g. PCA, spatial sign, etc)
+
+## Impute
+
+Since we have no missing data, we don't need to impute. If we did, we would do that first. Remember, we need to impute on the Training Data and the Test Data separately so we don't have data leakage. If we imputed the median from all of the data or from the Training Data to the Test Data, the Test Data would have information it would not really have in a real world example where the data the model is exposed to is totally fresh and has never been seen by the model before.
+
+## Handle factor levels
+
+We will need to determine if any of our data needs to be turned into a factor. What we are looking for is data that should have a specific order to it (think education level, age group, etc.). The `recipes` package has steps called `step_string2factor` and `step_num2factor`, but I've had trouble with those as they seem to want to assign the same number of levels to all strings or numbers fed into them.
+
+```{r}
+glimpse(Data)
+```
+
+Business Travel looks like a factor and Attrition needs to be a factor for our purposes.
+
+```{r}
+Data %>% 
+  distinct(BusinessTravel)
+```
+
+Yep!So we make the TEST so that we can safely mutate the factors
+
+#Mutating BusinessTravel and Attrition into factors with a TEST data set then shifting it into Data once we know it took correctly:
+
+```{r}
+TEST <- Data %>%
+  mutate(BusinessTravel = factor(BusinessTravel,
+                                 levels = c("Non-Travel",
+                                            "Travel_Rarely",                                        "Travel_Frequently"))) %>%
+ 
+mutate(Attrition = as.factor(Attrition))
+
+glimpse(TEST)
+```
+
+#Double check it worked
+
+```{r}
+class(TEST$BusinessTravel)
+unique(TEST$BusinessTravel)
+class(TEST$Attrition)
+unique(TEST$Attrition)
+```
+
+It worked!
+
+Now we can see that instead of a character, `BusinessTravel` is a factor and `unique` will tell us the order of the levels. Let's run the syntax again and commit it to `Data` since we know it is doing what we want it to do and we will also turn `Attrition` into a factor as many of the models need the outcome variable to be a factor.
+
+#Now put it back into data
+
+```{r}
+#do before data visualization if you want it to show in the proper order
+
+Data <- Data %>%
+  mutate(BusinessTravel = factor(BusinessTravel,
+                                 levels = c("Non-Travel",
+                                            "Travel_Rarely",
+                                            "Travel_Frequently"))) %>%
+  mutate(Attrition = as.factor(Attrition))
+```
+
+#And double check
+
+```{r}
+glimpse(Data)
+```
+
+It worked!
+
+#Remove Employee Count, Standard Hours, and Over 18 because uniform answers. Remove ID and EmployeeNumber because they aren't predictors
+
+#I would also consider removing Marital Status from this for data sensitivity reasons, but I'm not going to quite yet.
+
+```{r}
+Data <- subset(Data, select = -c(Over18, EmployeeCount, EmployeeNumber, ID, StandardHours))
+view(Data)
+```
+
+## Recipes
+
+Here are some potentially helpful links to learn more about `recipes`.
+
+* (https://www.tidymodels.org/start/recipes/)
+
+* (https://itamarcaspi.rbind.io/post/recipes-for-dummies/)
+
+* LIME and Tidymodels on `attrition` data. (https://algotech.netlify.app/blog/interpreting-classification-model-with-lime/)
+
+We will now introduce you to `recipes`.
+
+`recipes` is a general data preprocessor with a modern interface. It can create model matrices that incorporate feature engineering, imputation, and other help tools.
+
+To build a recipe:
+1. Start the `recipe()`
+2. Define the variables involved
+3. Describe preprocessing step-by-step
+
+## Ridge Regression
+
+We will use the `glmnet` package to perform ridge regression. `parsnip` does not have a dedicated function to create a ridge regression model specification. You need to use `linear_reg()` and set `mixture = 0` to specify a ridge model. The `mixture` argument specifies the amount of different types of regularization, `mixture = 0` specifies only ridge regularization and `mixture = 1` specifies only lasso regularization. Setting `mixture` to a value between 0 and 1 lets us use both. When using the `glmnet` engine we also need to set a `penalty` to be able to fit the model. We will set this value to `0` for now, it is not the best value, but we will look at how to select the best value in a little bit.
+
+```{r}
+ridge_spec <- logistic_reg(mixture = 0, penalty = 0) %>%
+  set_mode("classification") %>%
+  set_engine("glmnet")
+```
+
+Once the specification is created we can fit it to our data. We will use all the predictors.
+
+```{r}
+ridge_fit <- fit(ridge_spec, Attrition ~ ., data = Data)
+```
+
+The `glmnet` package will fit the model for all values of `penalty` at once, so let us see what the parameter estimate for the model is now that we have `penalty = 0`.
+
+#Initial look
+
+```{r}
+tidy(ridge_fit)
+```
+
+Nothing too odd going on here it seems.
+
+#Imported lab notes:
+
+it would be nice if we could find the "best" value of the penalty. This is something we can use hyperparameter tuning for. Hyperparameter tuning is in its simplest form a way of fitting many models with different sets of hyperparameters trying to find one that performs "best". The complexity in hyperparameter tuning can come from how you try different models. We will keep it simple for this lab and only look at grid search, only looking at evenly spaced parameter values. This is a fine enough approach if you have one or two tunable parameters but can become computationally infeasible. See the chapter on [iterative search](https://www.tmwr.org/iterative-search.html) from [Tidy Modeling with R](https://www.tmwr.org/) for more information.
+
+We start like normal by setting up a validation split. A K-fold cross-validation data set is created on the training data set with 10 folds.
+
+```{r}
+set.seed(2871)
+Data_split <- initial_split(Data, strata = "Attrition")
+Data_train <- training(Data_split)
+Data_test <- testing(Data_split)
+Data_fold <- vfold_cv(Data_train, v = 10)
+```
+
+#Imported lab notes:
+
+We can use the `tune_grid()` function to perform hyperparameter tuning using a grid search. `tune_grid()` needs 3 different thing;
+
+- a `workflow` object containing the model and preprocessor,
+- a `rset` object containing the resamples the `workflow` should be fitted within, and
+- a tibble containing the parameter values to be evaluated.
+
+Optionally a metric set of performance metrics can be supplied for evaluation. If you don't set one then a default set of performance metrics is used.
+
+We already have a resample object created in `Hitters_fold`. Now we should create the workflow specification next.
+
+We just used the data set as is when we fit the model earlier. But ridge regression is scale sensitive so we need to make sure that the variables are on the same scale. We can use `step_normalize()`. Secondly let us deal with the factor variables ourself using `step_novel()` and `step_dummy()`.
+
+```{r}
+ridge_recipe <- 
+  recipe(formula = Attrition ~ ., data = Data_train) %>%
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_predictors())
+```
+
+The model specification will look very similar to what we have seen earlier, but we will set `penalty = tune()`. This tells `tune_grid()` that the `penalty` parameter should be tuned.
+
+```{r}
+ridge_spec <- 
+  logistic_reg(penalty = tune(), mixture = 0) %>% 
+  set_mode("classification") %>%
+  set_engine("glmnet")
+```
+
+Now we combine to create a `workflow` object.
+
+```{r}
+ridge_workflow <- workflow() %>% 
+  add_recipe(ridge_recipe) %>% 
+  add_model(ridge_spec)
+```
+
+The last thing we need is the values of `penalty` we are trying. This can be created using `grid_regular()` which creates a grid of evenly spaces parameter values. We use the `penalty()` function from the [dials](https://dials.tidymodels.org/) package to denote the parameter and set the range of the grid we are searching for. Note that this range is log-scaled.
+
+```{r}
+penalty_grid <- grid_regular(penalty(range = c(-5, 5)), levels = 50)
+penalty_grid
+```
+
+Using 50 levels for one parameter might seem overkill and in many applications it is. But remember that `glmnet` fits all the models in one go so adding more levels to `penalty` doesn't affect the computational speed much.
+
+Now we have everything we need and we can fit all the models.
+
+```{r}
+tune_res <- tune_grid(
+  ridge_workflow,
+  resamples = Data_fold, 
+  grid = penalty_grid
+)
+tune_res
+
+autoplot(tune_res)
+```
+
+Here we see that the amount of regularization affects the performance metrics differently. Note how there are areas where the amount of regularization doesn't have any meaningful influence on the coefficient estimates. We can also see the raw metrics that created this chart by calling `collect_metrics()`. 
+
+```{r}
+collect_metrics(tune_res)
+```
+
+The "best" values of this can be selected using `select_best()`, this function requires you to specify a `metric` that it should select against. 
+
+#Select your metric of choice - this one is between accuracy, roc_auc, and brier_class as stated above. Gathering amounts here to see if the data is balanced or unbalanced. Accuracy is better for balanced and roc_auc is better for unbalanced.
+
+```{r}
+summary(Data$Attrition)
+```
+
+This is fairly unbalanced, so roc auc is the better option between the two
+
+```{r}
+best_penalty_roc <- select_best(tune_res, metric = "roc_auc") #using roc_auc because it considers the trade offs between precision and recall while accuracy only looks at how many predictions are correct (https://www.shiksha.com/online-courses/articles/roc-auc-vs-accuracy/)
+best_penalty_roc
+
+best_penalty_acc <- select_best(tune_res, metric = "accuracy")
+best_penalty_acc
+```
+
+This value of `penalty` can then be used with `finalize_workflow()` to update/finalize the recipe by replacing `tune()` with the value of `best_penalty`. Now, this model should be fit again, this time using the whole training data set.
+
+```{r}
+ridge_final <- finalize_workflow(ridge_workflow, best_penalty_roc)
+ridge_final_fit <- fit(ridge_final, data = Data_train)
+```
+
+This final model can now be applied on our testing data set to validate the performance
+
+```{r}
+augment(ridge_final_fit, new_data = Data_test) %>%
+  conf_mat(truth = Attrition, estimate = .pred_class) %>%
+  summary()
+```
+
+
+This model has a very high sens and solid accuracy, but the specificity is not great.
+
+Given we are predicting attrition, accuracy and precision are important for an overall statistic, sensitivity is important to understand how to predict those that ARE leaving (true positive rate) and specificity is important for predicting those that stay. It appears that we are good at predicting overall (accuracy), good at predicting who will leave (sensitivity), but we are not good at predicting who will stay (specificity).
+
+
+```{r}
+logit_final_model <- fit(ridge_final, Data)
+```
+
+```{r}
+logit_final_model
+```
+
+```{r}
+# vip(logit_last_fit)
+
+logit_obj <- extract_fit_parsnip(logit_final_model)$fit
+logit_obj
+```
+
+```{r}
+summary(logit_obj)
+```
+```{r}
+tidy(logit_final_model, exponentiate = TRUE)
+```
+
+Overall pretty solid model, but let's try Lasso just for practice :)
+
+##Lasso Regression
+
+#imported notes:
+
+We will use the `glmnet` package to perform lasso regression. `parsnip` does not have a dedicated function to create a ridge regression model specification. You need to use `linear_reg()` and set `mixture = 1` to specify a lasso model. The `mixture` argument specifies the amount of different types of regularization, `mixture = 0` specifies only ridge regularization and `mixture = 1` specifies only lasso regularization. Setting `mixture` to a value between 0 and 1 lets us use both.
+
+The following procedure will be very similar to what we saw in the ridge regression section. The preprocessing needed is the same, but let us write it out one more time. 
+
+```{r}
+lasso_recipe <- 
+  recipe(formula = Attrition ~ ., data = Data_train) %>% 
+  step_novel(all_nominal_predictors()) %>% 
+  step_dummy(all_nominal_predictors()) %>% 
+  step_zv(all_predictors()) %>% 
+  step_normalize(all_predictors())
+```
+
+Next, we finish the lasso regression `workflow`.
+
+```{r}
+lasso_spec <- 
+  logistic_reg(penalty = tune(), mixture = 1) %>% 
+  set_mode("classification") %>% 
+  set_engine("glmnet") 
+lasso_workflow <- workflow() %>% 
+  add_recipe(lasso_recipe) %>% 
+  add_model(lasso_spec)
+```
+
+While we are doing a different kind of regularization we still use the same `penalty` argument. I have picked a different range for the values of penalty since I know it will be a good range. You would in practice have to cast a wide net at first and then narrow on the range of interest.
+
+I've chosen to do -10 to 10 to give a larger range.
+
+```{r}
+penalty_grid_lasso <- grid_regular(penalty(range = c(-10, 10)), levels = 50)
+```
+
+And we can use `tune_grid()` again.
+
+```{r}
+tune_res_lasso <- tune_grid(
+  lasso_workflow,
+  resamples = Data_fold, 
+  grid = penalty_grid
+)
+autoplot(tune_res)
+```
+
+We select the best value of `penalty` using `select_best()`
+
+We're using roc_auc for the same reasons as previously.
+
+```{r}
+best_penalty_lasso <- select_best(tune_res, metric = "roc_auc")
+best_penalty_lasso
+```
+
+
+And refit the using the whole training data set.
+
+```{r}
+lasso_final <- finalize_workflow(lasso_workflow, best_penalty_lasso)
+lasso_final_fit <- fit(lasso_final, data = Data_train)
+```
+
+Using roc_auc same as above
+
+```{r}
+augment(lasso_final_fit, new_data = Data_test) %>%
+conf_mat(truth = Attrition, estimate = .pred_class) %>%
+  summary()
+```
+
+Again, solid sens, acc, prec, but STILL not great spec.
+
+#run it back with original data and the lasso model
+
+```{r}
+logit_final_model_lasso <- fit(lasso_final, Data)
+```
+
+```{r}
+logit_final_model_lasso
+```
+
+```{r}
+# vip(logit_last_fit)
+
+logit_obj_lasso <- extract_fit_parsnip(logit_final_model_lasso)$fit
+logit_obj
+```
+
+```{r}
+summary(logit_obj_lasso)
+```
+
+```{r}
+tidy(logit_final_model_lasso, exponentiate = TRUE)
+```
+
+Ultimately, in determining an "optimal" model, these are acceptable but aren't quite as strong as I'd like given the specificity issues. This could lead to individuals who are not at risk of leaving receiving the intervention, which could be costly. It would depend on the opinions of executives if we'd rather spend the intervention resources and risk overspending OR if money is tight, being more selective with the intervention.
